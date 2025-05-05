@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "TestDataGenerator": {
+      "commandName": "Project",
+      "commandLineArgs": "\"C:\\Temp\\test.txt\" 5000"
+    }
+  }
+}
