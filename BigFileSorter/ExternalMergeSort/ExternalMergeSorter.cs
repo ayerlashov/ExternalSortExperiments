@@ -101,7 +101,7 @@ namespace BigFileSorter.ExternalMergeSort
                 int remainingFileCount = currentMergeFiles.Count;
                 var nextFiles = new List<string>();
 
-                foreach (var set in sortedChunkFilePaths.Chunk(readerStreamLimit))
+                foreach (var set in currentMergeFiles.Chunk(readerStreamLimit))
                 {
                     remainingFileCount -= set.Length;
 
