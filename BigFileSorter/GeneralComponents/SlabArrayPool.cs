@@ -11,7 +11,7 @@ namespace BigFileSorter.GeneralComponents
         private readonly Lock _lock = new();
         private volatile Slab _current;
 
-        public SlabArrayPool(int slabSize = 64 << 20)
+        public SlabArrayPool(int slabSize = 128 << 20)
         {
             _slabSize = slabSize;
             _current = new(slabSize, this);
