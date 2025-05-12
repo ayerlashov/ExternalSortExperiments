@@ -15,30 +15,40 @@ namespace BigFileSorter
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static IEnumerable<LineData> EnumerateLines(this AsciiLineBytesFileStreamReader reader, int lineBufferSize = 2500)
+        public static IEnumerable<LineData> EnumerateLines(this AsciiLineBytesFileStreamReader reader, int maxLineBufferSize = 5<<10)
         {
             bool finished = false;
-            var queue = new Queue<LineData>(lineBufferSize);
+            var queue = new Queue<LineData>(maxLineBufferSize);
+            var nextQueue = new Queue<LineData>(maxLineBufferSize);
+            int lineBufferSize = 10;
 
-            while (true)
+            Task<bool> nextQueueTask = Task.Run(() => PopulateQueue(reader, lineBufferSize, nextQueue));
+
+            while (!finished)
             {
-                while (!finished && queue.Count < lineBufferSize)
-                {
-                    if (reader.ReadLine() is not [_, ..] lineBytes)
-                    {
-                        finished = true;
-                        break;
-                    }
-                    queue.Enqueue(new LineData(lineBytes));
-                }
+                lineBufferSize = lineBufferSize < maxLineBufferSize ? lineBufferSize << 1 : maxLineBufferSize;
+                finished = nextQueueTask.GetAwaiter().GetResult();
 
-                if (queue.Count == 0)
-                    break;
+                (queue, nextQueue) = (nextQueue, queue);
+                nextQueueTask = Task.Run(() => PopulateQueue(reader, lineBufferSize, nextQueue));
 
                 while (queue.TryDequeue(out var line))
                 {
                     yield return line;
                 }
+            }
+
+            static bool PopulateQueue(AsciiLineBytesFileStreamReader reader, int lineBufferSize, Queue<LineData> queue)
+            {
+                while (queue.Count < lineBufferSize)
+                {
+                    if (reader.ReadLine() is not [_, ..] lineBytes)
+                        return true;
+
+                    queue.Enqueue(new LineData(lineBytes));
+                }
+
+                return false;
             }
         }
 

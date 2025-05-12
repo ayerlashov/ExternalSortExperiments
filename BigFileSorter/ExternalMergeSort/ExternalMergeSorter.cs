@@ -6,8 +6,9 @@ namespace BigFileSorter.ExternalMergeSort
     internal class ExternalMergeSorter(
         string tempFolderPath,
         long blockByteThreshold,
-        int streamBufferSize = ExternalMergeSorter.DefaultBufferSize,
-        int mergeFactor = 40)
+        int mergeFactor = 40,
+        int maxChunksInMemory = 4,
+        int streamBufferSize = ExternalMergeSorter.DefaultBufferSize)
     {
         public const int DefaultBufferSize = 4 << 20;
 
@@ -16,6 +17,7 @@ namespace BigFileSorter.ExternalMergeSort
         private readonly long _blockByteThreshold = blockByteThreshold;
         private readonly int _streamBufferSize = streamBufferSize;
         private readonly int _mergeFactor = mergeFactor;
+        private readonly int _maxChunksInMemory = maxChunksInMemory;
 
         public void Sort(
             string inputFilePath,
@@ -46,7 +48,7 @@ namespace BigFileSorter.ExternalMergeSort
             using var reader = new AsciiLineBytesFileStreamReader(inputFilePath);
             var currentChunk = new Chunk(_blockByteThreshold);
             var chunkTasks = new List<Task<string>>();
-            var chunkWriteSemaphore = new SemaphoreSlim(4);
+            var chunkWriteSemaphore = new SemaphoreSlim(_maxChunksInMemory);
 
             ReadOnlySpan<byte> line;
             while ((line = reader.ReadLine()) is not [])
@@ -54,6 +56,7 @@ namespace BigFileSorter.ExternalMergeSort
                 if (!currentChunk.TryAdd(line))
                 {
                     CompleteChunk(currentChunk);
+                    chunkWriteSemaphore.Wait();
 
                     currentChunk = new Chunk(_blockByteThreshold);
                     currentChunk.Add(line);
@@ -70,12 +73,11 @@ namespace BigFileSorter.ExternalMergeSort
             }
         }
 
-        private string WriteChunkToFile(Chunk chunk, SemaphoreSlim chunkTaskSemaphore)
+        private string WriteChunkToFile(Chunk chunk, SemaphoreSlim chunkWriteSemaphore)
         {
             try
             {
                 chunk.SortChunk();
-                chunkTaskSemaphore.Wait();
 
                 FileStream outputStream;
                 using (outputStream = GetTempFileStream())
@@ -88,7 +90,7 @@ namespace BigFileSorter.ExternalMergeSort
             finally
             {
                 chunk.Dispose();
-                chunkTaskSemaphore.Release();
+                chunkWriteSemaphore.Release();
             }
         }
 
@@ -103,7 +105,9 @@ namespace BigFileSorter.ExternalMergeSort
 
             while (currentMergeFiles.Count > 1)
             {
-                Helpers.Log($"K-way merge pass {pass++}. File count: {currentMergeFiles.Count}. Chunk size: {chunkSize}. Merge factor: {_mergeFactor}. Processor count: {Environment.ProcessorCount}");
+                Helpers.Log($"Starting K-way merge pass {pass++}. File count: {currentMergeFiles.Count}. " +
+                    $"Chunk size: {chunkSize}. Merge factor: {_mergeFactor}. " +
+                    $"Processor count: {Environment.ProcessorCount}");
                 currentMergeFiles = currentMergeFiles
                     .Chunk(chunkSize)
                     .AsParallel()
