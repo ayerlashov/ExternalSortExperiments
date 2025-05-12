@@ -2,21 +2,23 @@
 
 namespace BigFileSorter.GeneralComponents
 {
-    class LoserTree<T>
-      where T : notnull, IComparable<T>
+    class LoserTree<T, TSource>
+        where T : notnull, IComparable<T>
+        where TSource : IDataSource<T>
     {
-        public IEnumerator<T>[] _sources;
+        public TSource[] _sources;
         private readonly TournamentTreeNode[] _tree;
         public short _lastRowIndex;
         private TournamentTreeNode _winner;
 
-        public LoserTree(IEnumerable<T>[] sources)
+        public LoserTree(TSource[] sources)
         {
-            _sources = [.. sources.Select(c => c.GetEnumerator())];
+            _sources = sources;
 
             var pow = Math.Ceiling(Math.Log(_sources.Length, 2));
             var lastRowLength = (int)Math.Pow(2, pow);
             var totalLength = (int)(Math.Pow(2, pow + 1) - 1);
+
             _lastRowIndex = (short)(totalLength - lastRowLength);
 
             _tree = new TournamentTreeNode[totalLength];
@@ -27,9 +29,9 @@ namespace BigFileSorter.GeneralComponents
             {
                 var source = _sources[i];
 
-                if (source.MoveNext())
+                if (source.Next() is (true, { } current))
                 {
-                    var player = new TournamentTreeNode(i, source.Current);
+                    var player = new TournamentTreeNode(i, current);
 
                     _tree[_lastRowIndex + i] = player;
                 }
@@ -56,6 +58,7 @@ namespace BigFileSorter.GeneralComponents
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public (bool success, T? value) TryGetMin()
         {
             if (_winner.SourceIndex == -1)
@@ -63,8 +66,8 @@ namespace BigFileSorter.GeneralComponents
 
             var (sourceIndex, result) = _winner;
 
-            TournamentTreeNode nextNode = _sources[sourceIndex].MoveNext()
-                ? new (sourceIndex, _sources[sourceIndex].Current)
+            TournamentTreeNode nextNode = _sources[sourceIndex].Next() is (true, { } current)
+                ? new (sourceIndex, current)
                 : new ();
 
             Insert(nextNode, sourceIndex + _lastRowIndex);
@@ -72,7 +75,7 @@ namespace BigFileSorter.GeneralComponents
             return (true, result);
         }
 
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void Insert(TournamentTreeNode newNode, int targetIndex)
         {
             int advanceeIndex = targetIndex;

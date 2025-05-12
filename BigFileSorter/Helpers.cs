@@ -1,5 +1,4 @@
 ﻿using BigFileSorter.GeneralComponents;
-using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace BigFileSorter
@@ -14,42 +13,21 @@ namespace BigFileSorter
                 yield return n;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static IEnumerable<LineData> EnumerateLines(this AsciiLineBytesFileStreamReader reader, int maxLineBufferSize = 5<<10)
+        public static IEnumerable<LineData> EnumerateLines(this AsciiLineBytesFileStreamReader reader, int? maxLineBufferSize = null)
         {
-            bool finished = false;
-            var queue = new Queue<LineData>(maxLineBufferSize);
-            var nextQueue = new Queue<LineData>(maxLineBufferSize);
-            int lineBufferSize = 10;
+            var source = reader.GetBufferedLineSource(maxLineBufferSize);
 
-            Task<bool> nextQueueTask = Task.Run(() => PopulateQueue(reader, lineBufferSize, nextQueue));
-
-            while (!finished)
+            while (source.Next() is (true, { } line))
             {
-                lineBufferSize = lineBufferSize < maxLineBufferSize ? lineBufferSize << 1 : maxLineBufferSize;
-                finished = nextQueueTask.GetAwaiter().GetResult();
-
-                (queue, nextQueue) = (nextQueue, queue);
-                nextQueueTask = Task.Run(() => PopulateQueue(reader, lineBufferSize, nextQueue));
-
-                while (queue.TryDequeue(out var line))
-                {
-                    yield return line;
-                }
+                yield return line;
             }
+        }
 
-            static bool PopulateQueue(AsciiLineBytesFileStreamReader reader, int lineBufferSize, Queue<LineData> queue)
-            {
-                while (queue.Count < lineBufferSize)
-                {
-                    if (reader.ReadLine() is not [_, ..] lineBytes)
-                        return true;
-
-                    queue.Enqueue(new LineData(lineBytes));
-                }
-
-                return false;
-            }
+        public static BufferedLineSource GetBufferedLineSource(this AsciiLineBytesFileStreamReader reader, int? maxLineBufferSize = null)
+        {
+            return (maxLineBufferSize == null)
+                ? new BufferedLineSource(reader)
+                : new BufferedLineSource(reader, maxLineBufferSize.Value);
         }
 
         public static IEnumerable<(long ln, string previous, string line)> Verify(this IEnumerable<LineData> lineEnumeration)

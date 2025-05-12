@@ -1,16 +1,16 @@
-﻿using BigFileSorter.GeneralComponents;
-using System.Buffers.Text;
+﻿using System.Buffers.Text;
 using System.Runtime.CompilerServices;
 
-namespace BigFileSorter
+namespace BigFileSorter.GeneralComponents
 {
     internal readonly struct LineData : IComparable<LineData>, IDisposable
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public LineData(ReadOnlySpan<byte> line)
         {
             var dotIndex = line.IndexOf((byte)'.');
             Num = long.Parse(line[..dotIndex]);
-            
+
             line = line[(dotIndex + 2)..];
 
             FirstWordBytes.Bytes.Clear();

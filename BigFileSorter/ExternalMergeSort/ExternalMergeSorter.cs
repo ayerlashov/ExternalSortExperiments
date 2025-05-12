@@ -1,5 +1,6 @@
 ﻿using BigFileSorter.GeneralComponents;
 using System.Runtime.CompilerServices;
+using LineQueue = BigFileSorter.GeneralComponents.LoserTree<BigFileSorter.GeneralComponents.LineData, BigFileSorter.GeneralComponents.BufferedLineSource>;
 
 namespace BigFileSorter.ExternalMergeSort
 {
@@ -108,6 +109,7 @@ namespace BigFileSorter.ExternalMergeSort
                 Helpers.Log($"Starting K-way merge pass {pass++}. File count: {currentMergeFiles.Count}. " +
                     $"Chunk size: {chunkSize}. Merge factor: {_mergeFactor}. " +
                     $"Processor count: {Environment.ProcessorCount}");
+
                 currentMergeFiles = currentMergeFiles
                     .Chunk(chunkSize)
                     .AsParallel()
@@ -137,11 +139,11 @@ namespace BigFileSorter.ExternalMergeSort
                     readers.Add(new AsciiLineBytesFileStreamReader(file));
                 }
 
-                var queue = new LoserTree<LineData>(readers.Select(r => r.EnumerateLines()).ToArray());
+                var queue = new LineQueue(readers.Select(r => r.GetBufferedLineSource()).ToArray());
 
                 using var writer = GetTempFileStream();
                 
-                MergeChunks(readers, queue, writer);
+                MergeChunks(queue, writer);
 
                 return writer.Name;
             }
@@ -161,7 +163,7 @@ namespace BigFileSorter.ExternalMergeSort
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         [SkipLocalsInit]
-        private static void MergeChunks(List<AsciiLineBytesFileStreamReader> readers, LoserTree<LineData> queue, FileStream writer)
+        private static void MergeChunks(LineQueue queue, FileStream writer)
         {
             Span<byte> numberBuffer = stackalloc byte[20];
 
