@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace BigFileSorter.GeneralComponents
 {
@@ -23,6 +24,7 @@ namespace BigFileSorter.GeneralComponents
             _bufferSize = bufferSize;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ReadOnlySpan<byte> ReadLine()
         {
             if (_endOfStreamReached)

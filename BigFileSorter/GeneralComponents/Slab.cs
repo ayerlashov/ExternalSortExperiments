@@ -1,4 +1,6 @@
-﻿namespace BigFileSorter.GeneralComponents
+﻿using System.Runtime.CompilerServices;
+
+namespace BigFileSorter.GeneralComponents
 {
     internal class Slab(int size, SlabArrayPool owner)
     {
@@ -34,6 +36,7 @@
             return true;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Release()
         {
             var count = Interlocked.Decrement(ref _refCount);
