@@ -1,36 +1,55 @@
-﻿using System.Buffers.Binary;
+﻿using BigFileSorter.GeneralComponents;
 using System.Buffers.Text;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace BigFileSorter
 {
-    internal readonly struct LineData : IComparable<LineData>
+    internal readonly struct LineData : IComparable<LineData>, IDisposable
     {
         public LineData(ReadOnlySpan<byte> line)
         {
             var dotIndex = line.IndexOf((byte)'.');
             Num = long.Parse(line[..dotIndex]);
+            
+            line = line[(dotIndex + 2)..];
 
-            Words = line[(dotIndex + 2)..].ToArray();
+            FirstWordBytes.Bytes.Clear();
 
-            _firstWordBytes = ReadUInt32(Words.Span);
+            var firstWordBytesLimit = Math.Min(line.Length, (ushort)FirstWordBytes.Bytes.Length);
+            line[..firstWordBytesLimit].CopyTo(FirstWordBytes.Bytes);
+
+            _words = SlabArrayPool.Shared.From(line[firstWordBytesLimit..]);
+            RemainingWordBytes = _words.Memory;
+
+            line[firstWordBytesLimit..].CopyTo(RemainingWordBytes.Span);
         }
 
-        public readonly ReadOnlyMemory<byte> Words;
+        private readonly SlabSegment _words;
+        public readonly Memory<byte> RemainingWordBytes;
         public readonly long Num;
-        private readonly uint _firstWordBytes;
+        public readonly InlineBytes FirstWordBytes;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public int CompareTo(LineData other)
+        public readonly int CompareTo(LineData other)
         {
-            uint a = _firstWordBytes;
-            uint b = other._firstWordBytes;
+            var a = FirstWordBytes;
+            var b = other.FirstWordBytes;
+            int cmp = a.Bytes.SequenceCompareTo(b.Bytes);
+            if (cmp != 0) return cmp;
 
-            if (a < b) return -1;
-            if (a > b) return 1;
+            cmp = RemainingWordBytes.Span.SequenceCompareTo(other.RemainingWordBytes.Span);
+            if (cmp != 0) return cmp;
 
-            int cmp = Words.Span.SequenceCompareTo(other.Words.Span);
+            long n1 = Num, n2 = other.Num;
+            if (n1 < n2) return -1;
+            if (n1 > n2) return 1;
+            return 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int CompareWithoutPrefix(LineData other)
+        {
+            int cmp = RemainingWordBytes.Span.SequenceCompareTo(other.RemainingWordBytes.Span);
             if (cmp != 0) return cmp;
 
             long n1 = Num, n2 = other.Num;
@@ -48,42 +67,25 @@ namespace BigFileSorter
             stream.Write(numberBuffer[..bytesWritten]);
             stream.WriteByte((byte)'.');
             stream.WriteByte((byte)' ');
-            stream.Write(Words.Span);
+            var i = FirstWordBytes.Bytes.IndexOf((byte)0);
+            stream.Write(FirstWordBytes.Bytes[..(i < 0 ? FirstWordBytes.Bytes.Length : i)]);
+            stream.Write(RemainingWordBytes.Span);
             stream.WriteByte((byte)'\n');
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [SkipLocalsInit]
-        internal void WriteTo<TStream>(TStream stream)
-            where TStream : Stream
+        public override string ToString()
         {
-            Span<byte> numberBuffer = stackalloc byte[20];
-            WriteTo(stream, numberBuffer);
+            using var m = new MemoryStream(1050);
+            using var r = new StreamReader(m);
+            Span<byte> bytes = stackalloc byte[20];
+            WriteTo(m, bytes);
+            m.Position = 0;
+            return r.ReadToEnd();
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint ReadUInt32(ReadOnlySpan<byte> sourceBytes)
+        public void Dispose()
         {
-            uint result;
-
-            if (sourceBytes.Length >= 4)
-            {
-                result = MemoryMarshal.Read<uint>(sourceBytes);
-            }
-            else
-            {
-                Span<byte> tmp = stackalloc byte[4];
-                sourceBytes.CopyTo(tmp);
-
-                result = MemoryMarshal.Read<uint>(tmp);
-            }
-
-            if (!BitConverter.IsLittleEndian)
-            {
-                result = BinaryPrimitives.ReverseEndianness(result);
-            }
-
-            return result;
+            _words.Dispose();
         }
     }
 }

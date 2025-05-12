@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using BigFileSorter.GeneralComponents;
+using System.Runtime.CompilerServices;
 
 namespace BigFileSorter.ExternalMergeSort
 {
@@ -6,14 +7,15 @@ namespace BigFileSorter.ExternalMergeSort
         string tempFolderPath,
         long blockByteThreshold,
         int streamBufferSize = ExternalMergeSorter.DefaultBufferSize,
-        int openChunkFileCountLimit = 20)
+        int mergeFactor = 40)
     {
-        public const int DefaultBufferSize = 1 << 20;
+        public const int DefaultBufferSize = 4 << 20;
+
         private readonly string _tempFilePrefix = Guid.NewGuid().ToString();
         private readonly string _tempFolderPath = tempFolderPath;
         private readonly long _blockByteThreshold = blockByteThreshold;
         private readonly int _streamBufferSize = streamBufferSize;
-        private readonly int _openChunkFileCountLimit = openChunkFileCountLimit;
+        private readonly int _mergeFactor = mergeFactor;
 
         public void Sort(
             string inputFilePath,
@@ -22,14 +24,11 @@ namespace BigFileSorter.ExternalMergeSort
             try
             {
                 var chunkFilePaths = FirstPass(inputFilePath);
-                
-                Console.WriteLine("Completed first pass.");
 
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+                Helpers.Log("Completed first pass.");
+                Helpers.Log("Starting k-way merge.");
 
-                Console.WriteLine("Starting k-way merge.");
-
-                var finalFilePath = MergeAllSortedChunks(chunkFilePaths);
+                var finalFilePath = MergeAllSortedChunks([..chunkFilePaths]);
 
                 File.Move(finalFilePath, outputFilePath, true);
             }
@@ -47,7 +46,7 @@ namespace BigFileSorter.ExternalMergeSort
             using var reader = new AsciiLineBytesFileStreamReader(inputFilePath);
             var currentChunk = new Chunk(_blockByteThreshold);
             var chunkTasks = new List<Task<string>>();
-            var chunkTaskSemaphore = new SemaphoreSlim(_openChunkFileCountLimit);
+            var chunkWriteSemaphore = new SemaphoreSlim(4);
 
             ReadOnlySpan<byte> line;
             while ((line = reader.ReadLine()) is not [])
@@ -67,7 +66,7 @@ namespace BigFileSorter.ExternalMergeSort
 
             void CompleteChunk(Chunk chunk)
             {
-                chunkTasks.Add(Task.Run(() => WriteChunkToFile(chunk, chunkTaskSemaphore)));
+                chunkTasks.Add(Task.Run(() => WriteChunkToFile(chunk, chunkWriteSemaphore)));
             }
         }
 
@@ -75,45 +74,46 @@ namespace BigFileSorter.ExternalMergeSort
         {
             try
             {
+                chunk.SortChunk();
                 chunkTaskSemaphore.Wait();
 
                 FileStream outputStream;
-                using (outputStream = GetRandomFileStream())
+                using (outputStream = GetTempFileStream())
                 {
-                    chunk.WriteSortedChunk(outputStream);
+                    chunk.WriteChunk(outputStream);
                 }
 
                 return outputStream.Name;
             }
             finally
             {
+                chunk.Dispose();
                 chunkTaskSemaphore.Release();
             }
         }
 
-        private string MergeAllSortedChunks(IReadOnlyCollection<string> sortedChunkFilePaths)
+        private string MergeAllSortedChunks(List<string> sortedChunkFilePaths)
         {
-            var readerStreamLimit = _openChunkFileCountLimit - 1;
-            IReadOnlyCollection<string> currentMergeFiles = sortedChunkFilePaths;
+            List<string> currentMergeFiles = sortedChunkFilePaths;
+
+            var chunkSize = (int)Math.Ceiling(currentMergeFiles.Count / (double)_mergeFactor);
+            if (chunkSize == 1)
+                chunkSize = _mergeFactor;
+            int pass = 1;
 
             while (currentMergeFiles.Count > 1)
             {
-                int remainingFileCount = currentMergeFiles.Count;
-                var nextFiles = new List<string>();
+                Helpers.Log($"K-way merge pass {pass++}. File count: {currentMergeFiles.Count}. Chunk size: {chunkSize}. Merge factor: {_mergeFactor}. Processor count: {Environment.ProcessorCount}");
+                currentMergeFiles = currentMergeFiles
+                    .Chunk(chunkSize)
+                    .AsParallel()
+                    .WithDegreeOfParallelism(Math.Min(_mergeFactor, Environment.ProcessorCount))
+                    .WithExecutionMode(ParallelExecutionMode.ForceParallelism)
+                    .Select(MergeSortedFiles)
+                    .AsUnordered()
+                    .ToList();
 
-                foreach (var set in currentMergeFiles.Chunk(readerStreamLimit))
-                {
-                    remainingFileCount -= set.Length;
-
-                    if (remainingFileCount + nextFiles.Count <= readerStreamLimit)
-                    {
-                        return MergeSortedFiles([..nextFiles, ..set]);
-                    }
-
-                    nextFiles.Add(MergeSortedFiles(set));
-                }
-
-                currentMergeFiles = nextFiles;
+                chunkSize = _mergeFactor;
             }
 
             return currentMergeFiles.First();
@@ -121,18 +121,21 @@ namespace BigFileSorter.ExternalMergeSort
 
         private string MergeSortedFiles(string[] sortedChunkFilePaths)
         {
+            if (sortedChunkFilePaths.Length == 1)
+                return sortedChunkFilePaths[0];
+
             var readers = new List<AsciiLineBytesFileStreamReader>(sortedChunkFilePaths.Length);
 
             try
             {
                 foreach (var file in sortedChunkFilePaths)
                 {
-                    readers.Add(new AsciiLineBytesFileStreamReader(file, _streamBufferSize));
+                    readers.Add(new AsciiLineBytesFileStreamReader(file));
                 }
 
-                var queue = InitQueue(readers);
+                var queue = new LoserTree<LineData>(readers.Select(r => r.EnumerateLines()).ToArray());
 
-                using var writer = GetRandomFileStream();
+                using var writer = GetTempFileStream();
                 
                 MergeChunks(readers, queue, writer);
 
@@ -147,51 +150,28 @@ namespace BigFileSorter.ExternalMergeSort
 
                 foreach (var filePath in readers.Select(r => r.Name))
                 {
-                    try { File.Delete(filePath); } catch { /* ignore */ }
+                    Task.Run(() => File.Delete(filePath));
                 }
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         [SkipLocalsInit]
-        private static void MergeChunks(List<AsciiLineBytesFileStreamReader> readers, PriorityQueue<(LineData Line, int Index), LineData> queue, FileStream writer)
+        private static void MergeChunks(List<AsciiLineBytesFileStreamReader> readers, LoserTree<LineData> queue, FileStream writer)
         {
             Span<byte> numberBuffer = stackalloc byte[20];
-            while (queue.Count > 0)
+
+            while (queue.TryGetMin() is (true, { } value))
             {
-                var (smallestLine, sourceIndex) = queue.Dequeue();
-                smallestLine.WriteTo(writer, numberBuffer);
-                ReadInLine(readers, queue, sourceIndex);
-            }
-        }
-
-        private static PriorityQueue<(LineData Line, int Index), LineData>  InitQueue(List<AsciiLineBytesFileStreamReader> readers)
-        {
-            var queue = new PriorityQueue<(LineData Line, int Index), LineData>();
-
-            for (int i = 0; i < readers.Count; i++)
-            {
-                ReadInLine(readers, queue, i);
-            }
-
-            return queue;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ReadInLine(List<AsciiLineBytesFileStreamReader> readers, PriorityQueue<(LineData Line, int Index), LineData> queue, int sourceIndex)
-        {
-            var lineBytes = readers[sourceIndex].ReadLine();
-            if (lineBytes is not [])
-            {
-                var line = new LineData(lineBytes);
-                queue.Enqueue((line, sourceIndex), line);
+                value.WriteTo(writer, numberBuffer);
+                value.Dispose();
             }
         }
 
         private string GetRandomFilePath() =>
             Path.Combine(_tempFolderPath, $"{_tempFilePrefix}_{Guid.NewGuid()}.txt");
 
-        private FileStream GetRandomFileStream() =>
+        private FileStream GetTempFileStream() =>
             GetOutputStream(GetRandomFilePath());
 
         private FileStream GetOutputStream(string outputFilePath) =>

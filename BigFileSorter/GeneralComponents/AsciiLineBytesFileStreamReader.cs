@@ -1,6 +1,6 @@
 ﻿using System.Buffers;
 
-namespace BigFileSorter
+namespace BigFileSorter.GeneralComponents
 {
     internal class AsciiLineBytesFileStreamReader : FileStream
     {
@@ -72,6 +72,7 @@ namespace BigFileSorter
 
         protected override void Dispose(bool disposing)
         {
+            Flush();
             base.Dispose(disposing);
 
             ArrayPool<byte>.Shared.Return(_rentedBuffer);

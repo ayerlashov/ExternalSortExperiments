@@ -27,9 +27,9 @@
             Directory.CreateDirectory(directory);
 
             long mebibyteThreshold = defaultMebibyteThreshold;
-            if (args is [ _, { } byteCountString ])
+            if (args is [ _, { } mebibyteCountString ])
             {
-                if (!long.TryParse(byteCountString, out mebibyteThreshold))
+                if (!long.TryParse(mebibyteCountString, out mebibyteThreshold))
                 {
                     Console.WriteLine("Can't parse the byteCount.");
                     return;

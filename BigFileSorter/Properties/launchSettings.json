@@ -2,7 +2,7 @@
   "profiles": {
     "BigFileSorter": {
       "commandName": "Project",
-      "commandLineArgs": "C:\\Temp\\test.txt\r\nC:\\Temp\\test_sorted.txt\r\nC:\\Temp\\test\\\r\n500"
+      "commandLineArgs": "sort\r\nC:\\Temp\\test.txt\r\nC:\\Temp\\test_sorted.txt\r\nC:\\Temp\\test\\"
     }
   }
 }
